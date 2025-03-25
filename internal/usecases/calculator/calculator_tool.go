@@ -91,10 +91,10 @@ func (h *CalculatorHandler) CallTool(ctx context.Context, name string, arguments
 	// Parse arguments
 	args, ok := arguments.(map[string]interface{})
 	if !ok {
-		return nil, mcperrors.NewInvalidInputError("invalid arguments", nil)
+		return nil, mcperrors.NewInvalidInputError("invalid arguments format", nil)
 	}
 
-	// Get the two numbers
+	// Get the numbers
 	a, ok := args["a"].(float64)
 	if !ok {
 		return nil, mcperrors.NewInvalidInputError("parameter 'a' must be a number", nil)
@@ -105,9 +105,8 @@ func (h *CalculatorHandler) CallTool(ctx context.Context, name string, arguments
 		return nil, mcperrors.NewInvalidInputError("parameter 'b' must be a number", nil)
 	}
 
+	// Perform the calculation
 	var result float64
-
-	// Execute the requested operation
 	switch name {
 	case "add":
 		result = a + b

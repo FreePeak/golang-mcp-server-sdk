@@ -1,34 +1,56 @@
 package shared
 
-// JSONRPCVersion is the version of JSON-RPC used by MCP
+import (
+	"encoding/json"
+)
+
+// JSONRPCVersion is the version of JSON-RPC to use
 const JSONRPCVersion = "2.0"
 
-// JSONRPCMessage represents a JSON-RPC message
+// ErrorCode represents a JSON-RPC error code
+type ErrorCode int
+
+// Standard JSON-RPC error codes
+const (
+	ParseError     ErrorCode = -32700
+	InvalidRequest ErrorCode = -32600
+	MethodNotFound ErrorCode = -32601
+	InvalidParams  ErrorCode = -32602
+	InternalError  ErrorCode = -32603
+	ServerError    ErrorCode = -32000
+	// MCP-specific error codes
+	NotFound ErrorCode = -32001
+)
+
+// JSONRPCMessage is the interface that all JSON-RPC messages implement
 type JSONRPCMessage interface {
+	// IsRequest returns true if the message is a request
 	IsRequest() bool
+	// IsResponse returns true if the message is a response
 	IsResponse() bool
+	// IsNotification returns true if the message is a notification
 	IsNotification() bool
 }
 
 // JSONRPCRequest represents a JSON-RPC request
 type JSONRPCRequest struct {
-	JSONRPC string      `json:"jsonrpc"`
-	ID      interface{} `json:"id"`
-	Method  string      `json:"method"`
-	Params  interface{} `json:"params,omitempty"`
+	JSONRPC string          `json:"jsonrpc"`
+	ID      string          `json:"id"`
+	Method  string          `json:"method"`
+	Params  json.RawMessage `json:"params,omitempty"`
 }
 
-// IsRequest returns true for request messages
+// IsRequest returns true for requests
 func (r JSONRPCRequest) IsRequest() bool {
 	return true
 }
 
-// IsResponse returns false for request messages
+// IsResponse returns false for requests
 func (r JSONRPCRequest) IsResponse() bool {
 	return false
 }
 
-// IsNotification returns false for request messages
+// IsNotification returns false for requests
 func (r JSONRPCRequest) IsNotification() bool {
 	return false
 }
@@ -36,44 +58,44 @@ func (r JSONRPCRequest) IsNotification() bool {
 // JSONRPCResponse represents a JSON-RPC response
 type JSONRPCResponse struct {
 	JSONRPC string        `json:"jsonrpc"`
-	ID      interface{}   `json:"id"`
+	ID      string        `json:"id"`
 	Result  interface{}   `json:"result,omitempty"`
 	Error   *JSONRPCError `json:"error,omitempty"`
 }
 
-// IsRequest returns false for response messages
+// IsRequest returns false for responses
 func (r JSONRPCResponse) IsRequest() bool {
 	return false
 }
 
-// IsResponse returns true for response messages
+// IsResponse returns true for responses
 func (r JSONRPCResponse) IsResponse() bool {
 	return true
 }
 
-// IsNotification returns false for response messages
+// IsNotification returns false for responses
 func (r JSONRPCResponse) IsNotification() bool {
 	return false
 }
 
 // JSONRPCNotification represents a JSON-RPC notification
 type JSONRPCNotification struct {
-	JSONRPC string      `json:"jsonrpc"`
-	Method  string      `json:"method"`
-	Params  interface{} `json:"params,omitempty"`
+	JSONRPC string          `json:"jsonrpc"`
+	Method  string          `json:"method"`
+	Params  json.RawMessage `json:"params,omitempty"`
 }
 
-// IsRequest returns false for notification messages
+// IsRequest returns false for notifications
 func (n JSONRPCNotification) IsRequest() bool {
 	return false
 }
 
-// IsResponse returns false for notification messages
+// IsResponse returns false for notifications
 func (n JSONRPCNotification) IsResponse() bool {
 	return false
 }
 
-// IsNotification returns true for notification messages
+// IsNotification returns true for notifications
 func (n JSONRPCNotification) IsNotification() bool {
 	return true
 }
@@ -84,22 +106,6 @@ type JSONRPCError struct {
 	Message string      `json:"message"`
 	Data    interface{} `json:"data,omitempty"`
 }
-
-// ErrorCode defines standard JSON-RPC error codes
-type ErrorCode int
-
-const (
-	// ParseError indicates an error while parsing the JSON text
-	ParseError ErrorCode = -32700
-	// InvalidRequest indicates the JSON was not a valid Request object
-	InvalidRequest ErrorCode = -32600
-	// MethodNotFound indicates the method does not exist / is not available
-	MethodNotFound ErrorCode = -32601
-	// InvalidParams indicates invalid method parameters
-	InvalidParams ErrorCode = -32602
-	// InternalError indicates an internal JSON-RPC error
-	InternalError ErrorCode = -32603
-)
 
 // ErrorMessage returns a standard error message for a given error code
 func ErrorMessage(code ErrorCode) string {
@@ -114,6 +120,10 @@ func ErrorMessage(code ErrorCode) string {
 		return "Invalid params"
 	case InternalError:
 		return "Internal error"
+	case ServerError:
+		return "Server error"
+	case NotFound:
+		return "Not found"
 	default:
 		return "Unknown error"
 	}

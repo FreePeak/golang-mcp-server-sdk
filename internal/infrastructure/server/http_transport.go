@@ -267,7 +267,10 @@ func (t *HTTPTransport) handleRequest(w http.ResponseWriter, r *http.Request) {
 	if jsonRPCMessage.IsRequest() {
 		fmt.Printf("Sending accepted response for request\n")
 		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusAccepted)
+		json.NewEncoder(w).Encode(resp)
+	case <-t.closeCh:
+		// Transport closed
+		http.Error(w, "Server shutting down", http.StatusServiceUnavailable)
 	}
 	fmt.Printf("=== End Request ===\n\n")
 }
@@ -315,7 +318,7 @@ func (t *HTTPTransport) handleSSE(w http.ResponseWriter, r *http.Request) {
 	t.clientMutex.Unlock()
 	fmt.Printf("Client registered with session ID: %s. Total clients: %d\n", sessionID, clientCount)
 
-	// Clean up on connection close
+	// Clean up when the connection is closed
 	defer func() {
 		fmt.Printf("SSE connection closing for session ID: %s\n", sessionID)
 		t.clientMutex.Lock()
@@ -327,7 +330,7 @@ func (t *HTTPTransport) handleSSE(w http.ResponseWriter, r *http.Request) {
 		fmt.Printf("Client unregistered. Total clients: %d\n", len(t.clients))
 	}()
 
-	// Prepare a flusher for streaming
+	// Set up flusher
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		http.Error(w, "Streaming not supported", http.StatusInternalServerError)

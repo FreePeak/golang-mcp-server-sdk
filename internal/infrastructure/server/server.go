@@ -108,6 +108,9 @@ func (s *Server) Start(ctx context.Context) error {
 		return errors.New("no transport specified")
 	}
 
+	// Register the message handler
+	transport.SetCurrentHandler(s.handleMessage)
+
 	return s.transport.Start(ctx, s.handleMessage)
 }
 
@@ -470,7 +473,7 @@ func (s *Server) sendMCPErrorResponse(ctx context.Context, req shared.JSONRPCReq
 		message = fmt.Sprintf("Internal error: %v", err)
 	}
 
-	return s.sendErrorResponse(ctx, req, code, message)
+	return s.sendErrorResponse(ctx, req, shared.InternalError, err.Error())
 }
 
 // unmarshalParams unmarshals the params field into the target struct
@@ -483,7 +486,7 @@ func unmarshalParams(params interface{}, target interface{}) error {
 	return json.Unmarshal(data, target)
 }
 
-// GenerateRequestID generates a unique request ID
-func GenerateRequestID() string {
+// generateID generates a unique ID for a request
+func generateID() string {
 	return uuid.New().String()
 }

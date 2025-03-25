@@ -20,59 +20,87 @@ const (
 	ErrorTypeInternal ErrorType = "internal"
 )
 
-// MCPError represents an MCP-specific error
+// MCPError represents an error in the MCP protocol
 type MCPError struct {
-	Type    ErrorType
+	Code    ErrorCode
 	Message string
-	Cause   error
+	Data    interface{}
 }
 
-// Error implements the error interface
+// Error returns the error message
 func (e *MCPError) Error() string {
-	if e.Cause != nil {
-		return fmt.Sprintf("%s: %s: %v", e.Type, e.Message, e.Cause)
-	}
-	return fmt.Sprintf("%s: %s", e.Type, e.Message)
+	return e.Message
 }
 
-// Unwrap returns the underlying cause
-func (e *MCPError) Unwrap() error {
-	return e.Cause
-}
+// ErrorCode represents the type of error
+type ErrorCode int
+
+const (
+	// NotFound represents a resource/tool/prompt not found error
+	NotFound ErrorCode = iota
+	// InvalidInput represents an invalid input error
+	InvalidInput
+	// InternalError represents an internal server error
+	InternalError
+	// Unauthorized represents an unauthorized error
+	Unauthorized
+)
 
 // NewNotFoundError creates a new not found error
-func NewNotFoundError(message string, cause error) *MCPError {
+func NewNotFoundError(message string, data interface{}) *MCPError {
 	return &MCPError{
-		Type:    ErrorTypeNotFound,
+		Code:    NotFound,
 		Message: message,
-		Cause:   cause,
+		Data:    data,
 	}
 }
 
 // NewInvalidInputError creates a new invalid input error
-func NewInvalidInputError(message string, cause error) *MCPError {
+func NewInvalidInputError(message string, data interface{}) *MCPError {
 	return &MCPError{
-		Type:    ErrorTypeInvalidInput,
+		Code:    InvalidInput,
 		Message: message,
-		Cause:   cause,
-	}
-}
-
-// NewUnauthorizedError creates a new unauthorized error
-func NewUnauthorizedError(message string, cause error) *MCPError {
-	return &MCPError{
-		Type:    ErrorTypeUnauthorized,
-		Message: message,
-		Cause:   cause,
+		Data:    data,
 	}
 }
 
 // NewInternalError creates a new internal error
-func NewInternalError(message string, cause error) *MCPError {
+func NewInternalError(message string, data interface{}) *MCPError {
 	return &MCPError{
-		Type:    ErrorTypeInternal,
+		Code:    InternalError,
 		Message: message,
-		Cause:   cause,
+		Data:    data,
+	}
+}
+
+// NewUnauthorizedError creates a new unauthorized error
+func NewUnauthorizedError(message string, data interface{}) *MCPError {
+	return &MCPError{
+		Code:    Unauthorized,
+		Message: message,
+		Data:    data,
+	}
+}
+
+// Wrap wraps an error with additional context
+func Wrap(err error, message string) error {
+	if err == nil {
+		return nil
+	}
+
+	var mcpErr *MCPError
+	if ok := (err).(*MCPError) == mcpErr; !ok {
+		return &MCPError{
+			Code:    InternalError,
+			Message: fmt.Sprintf("%s: %v", message, err),
+		}
+	}
+
+	mcpErr = err.(*MCPError)
+	return &MCPError{
+		Code:    mcpErr.Code,
+		Message: fmt.Sprintf("%s: %s", message, mcpErr.Message),
+		Data:    mcpErr.Data,
 	}
 }
 
@@ -80,7 +108,7 @@ func NewInternalError(message string, cause error) *MCPError {
 func IsNotFound(err error) bool {
 	var mcpErr *MCPError
 	if errors.As(err, &mcpErr) {
-		return mcpErr.Type == ErrorTypeNotFound
+		return mcpErr.Code == NotFound
 	}
 	return false
 }
@@ -89,7 +117,7 @@ func IsNotFound(err error) bool {
 func IsInvalidInput(err error) bool {
 	var mcpErr *MCPError
 	if errors.As(err, &mcpErr) {
-		return mcpErr.Type == ErrorTypeInvalidInput
+		return mcpErr.Code == InvalidInput
 	}
 	return false
 }
@@ -98,7 +126,7 @@ func IsInvalidInput(err error) bool {
 func IsUnauthorized(err error) bool {
 	var mcpErr *MCPError
 	if errors.As(err, &mcpErr) {
-		return mcpErr.Type == ErrorTypeUnauthorized
+		return mcpErr.Code == Unauthorized
 	}
 	return false
 }
@@ -107,7 +135,7 @@ func IsUnauthorized(err error) bool {
 func IsInternal(err error) bool {
 	var mcpErr *MCPError
 	if errors.As(err, &mcpErr) {
-		return mcpErr.Type == ErrorTypeInternal
+		return mcpErr.Code == InternalError
 	}
 	return false
 }

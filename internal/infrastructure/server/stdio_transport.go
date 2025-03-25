@@ -81,8 +81,6 @@ func (t *StdioTransport) readMessages(ctx context.Context) {
 		select {
 		case <-t.closeCh:
 			return
-		case <-ctx.Done():
-			return
 		default:
 			line, err := t.reader.ReadBytes('\n')
 			if err != nil {

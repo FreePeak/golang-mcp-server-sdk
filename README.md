@@ -113,16 +113,16 @@ type MyToolHandler struct{}
 func (h *MyToolHandler) ListTools(ctx context.Context) ([]shared.Tool, error) {
     return []shared.Tool{
         {
-            Name:        "my_tool",
-            Description: "Description of my tool",
+            Name:        "myTool",
+            Description: "A custom tool",
             InputSchema: map[string]interface{}{
                 "type": "object",
                 "properties": map[string]interface{}{
-                    "param1": map[string]interface{}{
+                    "input": map[string]interface{}{
                         "type": "string",
                     },
                 },
-                "required": []string{"param1"},
+                "required": []string{"input"},
             },
         },
     }, nil
@@ -130,34 +130,51 @@ func (h *MyToolHandler) ListTools(ctx context.Context) ([]shared.Tool, error) {
 
 // CallTool executes a tool with the given arguments
 func (h *MyToolHandler) CallTool(ctx context.Context, name string, arguments interface{}) ([]shared.Content, error) {
-    // Tool implementation
-    // ...
-    
+    if name != "myTool" {
+        return nil, errors.New("tool not found")
+    }
+
+    args, ok := arguments.(map[string]interface{})
+    if !ok {
+        return nil, errors.New("invalid arguments")
+    }
+
+    input, ok := args["input"].(string)
+    if !ok {
+        return nil, errors.New("invalid input parameter")
+    }
+
     return []shared.Content{
         shared.TextContent{
             Type: "text",
-            Text: "Result",
+            Text: fmt.Sprintf("Processed: %s", input),
         },
     }, nil
 }
 ```
 
-### 2. Create and Configure the Server
+### 2. Create Server with Handlers
 
 ```go
-// Create the server
+// Create the MCP server
 srv := server.NewServer("my-server", "1.0.0")
 
 // Add handlers
-srv.WithToolHandler(myToolHandler)
-srv.WithResourceHandler(myResourceHandler)
-srv.WithPromptHandler(myPromptHandler)
+srv.WithToolHandler(NewMyToolHandler())
+srv.WithResourceHandler(NewMyResourceHandler())
+srv.WithPromptHandler(NewMyPromptHandler())
 
-// Connect with a transport
-srv.Connect(server.NewStdioTransport())
+// Connect with the appropriate transport
+err := srv.Connect(server.NewStdioTransport())
+if err != nil {
+    log.Fatalf("Error connecting transport: %v", err)
+}
 
 // Start the server
-srv.Start(ctx)
+err = srv.Start(ctx)
+if err != nil {
+    log.Fatalf("Error starting server: %v", err)
+}
 ```
 
 ## Transport Options

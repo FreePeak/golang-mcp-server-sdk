@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -59,9 +60,16 @@ func (t *HTTPTransport) Start(ctx context.Context, handler transport.MessageHand
 
 	fmt.Printf("Starting MCP server at %s\n", t.baseURL)
 	go func() {
+		fmt.Println("Starting HTTP server on", t.server.Addr)
 		if err := t.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			fmt.Printf("HTTP server error: %v\n", err)
 		}
+	}()
+
+	// Start a goroutine to handle shutdown
+	go func() {
+		<-ctx.Done()
+		t.Close()
 	}()
 
 	return nil
@@ -330,7 +338,7 @@ func (t *HTTPTransport) handleSSE(w http.ResponseWriter, r *http.Request) {
 		fmt.Printf("Client unregistered. Total clients: %d\n", len(t.clients))
 	}()
 
-	// Set up flusher
+	// Set up flusher for streaming
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		http.Error(w, "Streaming not supported", http.StatusInternalServerError)

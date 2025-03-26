@@ -3,8 +3,9 @@ package shared
 // MCP method names
 const (
 	// Core methods
-	MethodInitialize = "initialize"
-	MethodShutdown   = "shutdown"
+	MethodInitialize  = "initialize"
+	MethodInitialized = "initialized" // Client sends this notification after initialize
+	MethodShutdown    = "shutdown"
 
 	// Resource methods
 	MethodListResources = "resources/list"

@@ -125,6 +125,23 @@ func (s *Server) Stop() error {
 
 // handleMessage processes incoming JSON-RPC messages
 func (s *Server) handleMessage(ctx context.Context, message shared.JSONRPCMessage) error {
+	// Parse message for better debugging
+	msgJson, _ := json.Marshal(message)
+	fmt.Printf("Handling message: %s\n", string(msgJson))
+
+	// Check for initialized notification
+	if req, ok := message.(shared.JSONRPCRequest); ok {
+		if req.Method == "initialized" {
+			fmt.Println("Received 'initialized' notification - client setup complete")
+			s.mu.Lock()
+			s.isInitialized = true
+			s.mu.Unlock()
+			fmt.Println("Successfully marked server as initialized")
+			return nil
+		}
+	}
+
+	// Handle normal requests
 	if message.IsResponse() || message.IsNotification() {
 		// We only handle requests
 		return nil
@@ -142,6 +159,7 @@ func (s *Server) handleMessage(ctx context.Context, message shared.JSONRPCMessag
 		return s.handleInitialize(ctx, req)
 	}
 
+	// Check if server is initialized
 	s.mu.RLock()
 	initialized := s.isInitialized
 	s.mu.RUnlock()

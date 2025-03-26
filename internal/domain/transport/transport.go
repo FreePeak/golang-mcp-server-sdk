@@ -6,23 +6,23 @@ import (
 	"github.com/FreePeak/golang-mcp-server-sdk/internal/domain/shared"
 )
 
-// MessageHandler defines a function that processes incoming messages
+// MessageHandler is a function that handles incoming messages
 type MessageHandler func(ctx context.Context, message shared.JSONRPCMessage) error
 
-// Transport defines the interface for an MCP transport
+// Transport defines the interface for MCP transports
 type Transport interface {
-	// Start begins processing messages, with the given handler function
+	// Start starts the transport with the given message handler
 	Start(ctx context.Context, handler MessageHandler) error
 
 	// Send sends a message through the transport
 	Send(ctx context.Context, message shared.JSONRPCMessage) error
 
-	// Close stops the transport
+	// Close closes the transport
 	Close() error
 }
 
-// Factory creates transports
-type Factory interface {
+// TransportFactory creates transports
+type TransportFactory interface {
 	// CreateTransport creates a new transport instance
 	CreateTransport() (Transport, error)
 }

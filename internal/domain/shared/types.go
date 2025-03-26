@@ -2,8 +2,9 @@ package shared
 
 // ServerInfo contains information about the server
 type ServerInfo struct {
-	Name    string `json:"name"`
-	Version string `json:"version"`
+	Name     string                 `json:"name"`
+	Version  string                 `json:"version"`
+	Metadata map[string]interface{} `json:"metadata,omitempty"`
 }
 
 // InitializationOptions contains options for initializing the server
@@ -22,7 +23,9 @@ type Capabilities struct {
 type ResourcesCapability struct{}
 
 // ToolsCapability indicates support for tools
-type ToolsCapability struct{}
+type ToolsCapability struct {
+	ListChanged bool `json:"listChanged,omitempty"`
+}
 
 // PromptsCapability indicates support for prompts
 type PromptsCapability struct{}

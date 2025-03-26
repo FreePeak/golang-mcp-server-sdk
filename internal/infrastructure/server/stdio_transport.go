@@ -2,14 +2,12 @@ package server
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"sync"
-	"time"
 
 	"github.com/pkg/errors"
 
@@ -19,12 +17,12 @@ import (
 
 // StdioTransport implements a transport over standard input/output
 type StdioTransport struct {
-	reader     *bufio.Reader
-	writer     *bufio.Writer
-	closeCh    chan struct{}
-	closeOnce  sync.Once
-	isStarted  bool
-	startMutex sync.Mutex
+	reader    *bufio.Reader
+	writer    *bufio.Writer
+	handler   transport.MessageHandler
+	closeCh   chan struct{}
+	closeOnce sync.Once
+	writeMu   sync.Mutex
 }
 
 // NewStdioTransport creates a new stdio transport
@@ -36,45 +34,37 @@ func NewStdioTransport() *StdioTransport {
 	}
 }
 
-// NewStdioTransportWithIO creates a new stdio transport with custom reader and writer
-func NewStdioTransportWithIO(reader io.Reader, writer io.Writer) *StdioTransport {
-	return &StdioTransport{
-		reader:  bufio.NewReader(reader),
-		writer:  bufio.NewWriter(writer),
-		closeCh: make(chan struct{}),
-	}
-}
-
 // Start starts the transport
 func (t *StdioTransport) Start(ctx context.Context, handler transport.MessageHandler) error {
-	t.startMutex.Lock()
-	if t.isStarted {
-		t.startMutex.Unlock()
-		return errors.New("transport already started")
-	}
-	t.isStarted = true
-	t.startMutex.Unlock()
+	t.handler = handler
 
-	go t.processMessages(ctx, handler)
+	// Start reading messages
+	go t.readMessages(ctx)
+
 	return nil
 }
 
-// Send sends a message
+// Send sends a message through the transport
 func (t *StdioTransport) Send(ctx context.Context, message shared.JSONRPCMessage) error {
 	data, err := json.Marshal(message)
 	if err != nil {
 		return errors.Wrap(err, "error marshalling message")
 	}
 
-	// Add newline for message framing
-	data = append(data, '\n')
+	t.writeMu.Lock()
+	defer t.writeMu.Unlock()
 
-	_, err = t.writer.Write(data)
-	if err != nil {
+	if _, err := t.writer.Write(data); err != nil {
 		return errors.Wrap(err, "error writing message")
 	}
+	if err := t.writer.WriteByte('\n'); err != nil {
+		return errors.Wrap(err, "error writing newline")
+	}
+	if err := t.writer.Flush(); err != nil {
+		return errors.Wrap(err, "error flushing writer")
+	}
 
-	return t.writer.Flush()
+	return nil
 }
 
 // Close closes the transport
@@ -85,22 +75,8 @@ func (t *StdioTransport) Close() error {
 	return nil
 }
 
-// processMessages reads and processes incoming messages
-func (t *StdioTransport) processMessages(ctx context.Context, handler transport.MessageHandler) {
-	// Buffer for incomplete lines
-	var buffer []byte
-
-	// goroutine to handle context cancelation
-	go func() {
-		select {
-		case <-ctx.Done():
-			t.Close()
-		case <-t.closeCh:
-			// already closing
-		}
-	}()
-
-	// Main read loop
+// readMessages reads messages from stdin
+func (t *StdioTransport) readMessages(ctx context.Context) {
 	for {
 		select {
 		case <-t.closeCh:
@@ -108,92 +84,92 @@ func (t *StdioTransport) processMessages(ctx context.Context, handler transport.
 		case <-ctx.Done():
 			return
 		default:
-			// Continue with read
-		}
-
-		// Single byte buffer read to make it interruptible
-		buf := make([]byte, 1024)
-		n, err := t.reader.Read(buf)
-
-		if n > 0 {
-			// Add read bytes to buffer
-			buffer = append(buffer, buf[:n]...)
-
-			// Process complete lines
-			for {
-				// Look for newline
-				i := bytes.IndexByte(buffer, '\n')
-				if i < 0 {
-					break // No complete line yet
+			line, err := t.reader.ReadBytes('\n')
+			if err != nil {
+				if err != io.EOF {
+					fmt.Fprintf(os.Stderr, "Error reading from stdin: %v\n", err)
 				}
+				return
+			}
 
-				// Extract line
-				line := buffer[:i+1]
-				buffer = buffer[i+1:]
+			var message json.RawMessage
+			if err := json.Unmarshal(line, &message); err != nil {
+				fmt.Fprintf(os.Stderr, "Error unmarshalling message: %v\n", err)
+				continue
+			}
 
-				// Process the message
-				var message json.RawMessage
-				if err := json.Unmarshal(line, &message); err != nil {
-					continue // Invalid JSON, skip
-				}
+			var basic struct {
+				JSONRPC string      `json:"jsonrpc"`
+				ID      interface{} `json:"id,omitempty"`
+				Method  string      `json:"method,omitempty"`
+			}
+			if err := json.Unmarshal(message, &basic); err != nil {
+				fmt.Fprintf(os.Stderr, "Invalid JSON-RPC message: %v\n", err)
+				continue
+			}
 
-				// Determine message type
-				var basic struct {
-					JSONRPC string      `json:"jsonrpc"`
-					ID      interface{} `json:"id,omitempty"`
-					Method  string      `json:"method,omitempty"`
-				}
-				if err := json.Unmarshal(message, &basic); err != nil {
-					continue
-				}
+			if basic.JSONRPC != shared.JSONRPCVersion {
+				fmt.Fprintf(os.Stderr, "Invalid JSON-RPC version\n")
+				continue
+			}
 
-				var jsonRPCMessage shared.JSONRPCMessage
-				if basic.Method != "" {
-					if basic.ID != nil {
-						// Request
-						var request shared.JSONRPCRequest
-						if err := json.Unmarshal(message, &request); err != nil {
-							continue
-						}
-						jsonRPCMessage = request
-					} else {
-						// Notification
-						var notification shared.JSONRPCNotification
-						if err := json.Unmarshal(message, &notification); err != nil {
-							continue
-						}
-						jsonRPCMessage = notification
-					}
-				} else {
-					// Response
-					var response shared.JSONRPCResponse
-					if err := json.Unmarshal(message, &response); err != nil {
+			// Parse the message based on its type
+			var jsonRPCMessage shared.JSONRPCMessage
+			if basic.Method != "" {
+				if basic.ID != nil {
+					// Request
+					var request shared.JSONRPCRequest
+					if err := json.Unmarshal(message, &request); err != nil {
+						fmt.Fprintf(os.Stderr, "Invalid JSON-RPC request: %v\n", err)
 						continue
 					}
-					jsonRPCMessage = response
-				}
+					jsonRPCMessage = request
 
-				// Handle the message
-				if handler != nil {
-					if err := handler(ctx, jsonRPCMessage); err != nil {
-						fmt.Fprintln(os.Stderr, "Error handling message:", err)
+					// Handle initialize request specially
+					if request.Method == "initialize" {
+						response := shared.JSONRPCResponse{
+							JSONRPC: shared.JSONRPCVersion,
+							ID:      request.ID,
+							Result: map[string]interface{}{
+								"serverInfo": shared.ServerInfo{
+									Name:    "golang-mcp-server",
+									Version: "1.0.0",
+								},
+								"capabilities": shared.Capabilities{
+									Tools: &shared.ToolsCapability{},
+								},
+							},
+						}
+
+						if err := t.Send(ctx, response); err != nil {
+							fmt.Fprintf(os.Stderr, "Error sending initialize response: %v\n", err)
+						}
+						continue
 					}
+				} else {
+					// Notification
+					var notification shared.JSONRPCNotification
+					if err := json.Unmarshal(message, &notification); err != nil {
+						fmt.Fprintf(os.Stderr, "Invalid JSON-RPC notification: %v\n", err)
+						continue
+					}
+					jsonRPCMessage = notification
 				}
-			}
-		}
-
-		// Handle errors
-		if err != nil {
-			if err == io.EOF {
-				// EOF means we're done
-				t.Close()
-				return
-			} else if errors.Is(err, context.Canceled) {
-				// Context canceled
-				return
 			} else {
-				// Other errors - might be temporary
-				time.Sleep(10 * time.Millisecond)
+				// Response
+				var response shared.JSONRPCResponse
+				if err := json.Unmarshal(message, &response); err != nil {
+					fmt.Fprintf(os.Stderr, "Invalid JSON-RPC response: %v\n", err)
+					continue
+				}
+				jsonRPCMessage = response
+			}
+
+			// Handle the message
+			if t.handler != nil {
+				if err := t.handler(ctx, jsonRPCMessage); err != nil {
+					fmt.Fprintf(os.Stderr, "Error handling message: %v\n", err)
+				}
 			}
 		}
 	}

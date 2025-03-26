@@ -190,20 +190,7 @@ func (c *CursorConfig) GetDefaultTools() []shared.Tool {
 
 // ConfigureServerInfo customizes server info for Cursor client
 func (c *CursorConfig) ConfigureServerInfo(info *shared.ServerInfo) {
-	// Add metadata with tool listing URL for Cursor client
-	metadata := map[string]interface{}{
-		"urls": map[string]string{
-			"tools/list": "/tools/list",
-		},
-	}
-
-	// This is a workaround to add metadata to ServerInfo
-	// We rely on JSON marshaling to include this extra field
-	*info = shared.ServerInfo{
-		Name:     info.Name,
-		Version:  info.Version,
-		Metadata: metadata,
-	}
+	// No special customization needed for Cursor clients
 }
 
 // ConfigureCapabilities customizes capabilities for Cursor client

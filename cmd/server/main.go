@@ -8,207 +8,75 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/FreePeak/golang-mcp-server-sdk/internal/domain/shared"
-	"github.com/FreePeak/golang-mcp-server-sdk/internal/domain/transport"
 	"github.com/FreePeak/golang-mcp-server-sdk/internal/infrastructure/server"
+	"github.com/FreePeak/golang-mcp-server-sdk/internal/usecases/calculator"
+	"github.com/FreePeak/golang-mcp-server-sdk/internal/usecases/docs"
 )
 
-// handleCalculate handles the calculate tool request
-func handleCalculate(params map[string]interface{}) (interface{}, error) {
-	operation, ok := params["operation"].(string)
-	if !ok {
-		return nil, fmt.Errorf("operation must be a string")
-	}
-
-	a, ok := params["a"].(float64)
-	if !ok {
-		return nil, fmt.Errorf("a must be a number")
-	}
-
-	b, ok := params["b"].(float64)
-	if !ok {
-		return nil, fmt.Errorf("b must be a number")
-	}
-
-	var result float64
-	switch operation {
-	case "add":
-		result = a + b
-	case "subtract":
-		result = a - b
-	case "multiply":
-		result = a * b
-	case "divide":
-		if b == 0 {
-			return nil, fmt.Errorf("division by zero")
-		}
-		result = a / b
-	default:
-		return nil, fmt.Errorf("unknown operation: %s", operation)
-	}
-
-	return result, nil
-}
-
-// createMessageHandler creates a message handler with access to the transport
-func createMessageHandler(transport transport.Transport) transport.MessageHandler {
-	return func(ctx context.Context, message shared.JSONRPCMessage) error {
-		switch msg := message.(type) {
-		case shared.JSONRPCRequest:
-			switch msg.Method {
-			case "tools/list":
-				// Return available tools
-				response := shared.JSONRPCResponse{
-					JSONRPC: shared.JSONRPCVersion,
-					ID:      msg.ID,
-					Result: map[string]interface{}{
-						"tools": []map[string]interface{}{
-							{
-								"name":        "calculate",
-								"description": "Perform basic arithmetic calculations",
-								"inputSchema": map[string]interface{}{
-									"type": "object",
-									"properties": map[string]interface{}{
-										"operation": map[string]interface{}{
-											"type":        "string",
-											"description": "The arithmetic operation to perform",
-											"enum":        []string{"add", "subtract", "multiply", "divide"},
-										},
-										"a": map[string]interface{}{
-											"type":        "number",
-											"description": "First number",
-										},
-										"b": map[string]interface{}{
-											"type":        "number",
-											"description": "Second number",
-										},
-									},
-									"required": []string{"operation", "a", "b"},
-								},
-							},
-						},
-					},
-				}
-				return transport.Send(ctx, response)
-
-			case "tools/call":
-				if msg.Params == nil {
-					return fmt.Errorf("missing params")
-				}
-
-				toolParams, ok := msg.Params.(map[string]interface{})
-				if !ok {
-					return fmt.Errorf("invalid params format")
-				}
-
-				name, ok := toolParams["name"].(string)
-				if !ok {
-					return fmt.Errorf("missing tool name")
-				}
-
-				args, ok := toolParams["arguments"].(map[string]interface{})
-				if !ok {
-					return fmt.Errorf("invalid arguments format")
-				}
-
-				var result interface{}
-				var err error
-
-				switch name {
-				case "calculate":
-					result, err = handleCalculate(args)
-				default:
-					err = fmt.Errorf("unknown tool: %s", name)
-				}
-
-				if err != nil {
-					errorResponse := shared.JSONRPCResponse{
-						JSONRPC: shared.JSONRPCVersion,
-						ID:      msg.ID,
-						Error: &shared.JSONRPCError{
-							Code:    -32603,
-							Message: err.Error(),
-						},
-					}
-					return transport.Send(ctx, errorResponse)
-				}
-
-				response := shared.JSONRPCResponse{
-					JSONRPC: shared.JSONRPCVersion,
-					ID:      msg.ID,
-					Result: map[string]interface{}{
-						"content": []map[string]interface{}{
-							{
-								"type": "text",
-								"text": fmt.Sprintf("%v", result),
-							},
-						},
-					},
-				}
-				return transport.Send(ctx, response)
-			}
-		}
-
-		return nil
-	}
-}
-
 func main() {
-	// Parse command line flags
-	transportType := flag.String("transport", "stdio", "Transport type (stdio or sse)")
-	host := flag.String("host", "localhost", "Host to listen on (for SSE transport)")
-	port := flag.Int("port", 8080, "Port to listen on (for SSE transport)")
+	// Parse command-line flags
+	var (
+		httpAddr = flag.String("http", "", "HTTP server address (e.g., :8080)")
+		useStdio = flag.Bool("stdio", true, "Use stdio transport")
+	)
 	flag.Parse()
 
-	// Create transport factory based on type
-	var factory transport.TransportFactory
-	switch *transportType {
-	case "stdio":
-		factory = server.NewStdioTransportFactory()
-	case "sse":
-		factory = server.NewHTTPTransportFactory(*host, *port)
-	default:
-		fmt.Fprintf(os.Stderr, "Invalid transport type: %s\n", *transportType)
-		os.Exit(1)
-	}
-
-	// Create transport
-	transport, err := factory.CreateTransport()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to create transport: %v\n", err)
-		os.Exit(1)
-	}
-
-	// Create context that can be canceled
+	// Create a context that cancels on SIGINT/SIGTERM
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Handle OS signals for graceful shutdown
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+	// Set up signal handling
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
-		<-sigChan
-		fmt.Println("\nReceived shutdown signal")
+		<-sigCh
+		fmt.Println("\nShutting down...")
 		cancel()
 	}()
 
-	fmt.Printf("Starting MCP server with %s transport\n", *transportType)
-	if *transportType == "sse" {
-		fmt.Printf("Listening on http://%s:%d\n", *host, *port)
-	}
+	// Create the MCP server with options
+	srv := server.NewServer(
+		"calculator-server",
+		"1.0.0",
+		server.WithToolHandler(calculator.NewCalculatorHandler()),
+		server.WithResourceHandler(docs.NewDocsHandler()),
+	)
 
-	// Start the transport with the message handler
-	if err := transport.Start(ctx, createMessageHandler(transport)); err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to start transport: %v\n", err)
+	// Connect with the appropriate transport
+	var err error
+	if *useStdio {
+		// Use stdio transport
+		err = srv.Connect(server.NewStdioTransport())
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error connecting transport: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Fprintf(os.Stderr, "MCP server running on stdio\n")
+	} else if *httpAddr != "" {
+		// Use HTTP transport
+		err = srv.Connect(server.NewHTTPTransport(*httpAddr))
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error connecting transport: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Fprintf(os.Stderr, "MCP server running on http://%s\n", *httpAddr)
+	} else {
+		fmt.Fprintf(os.Stderr, "Error: must specify either -stdio or -http\n")
 		os.Exit(1)
 	}
 
-	// Wait for context cancellation
+	// Start the server
+	err = srv.Start(ctx)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error starting server: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Wait for context cancellation (from signal handler)
 	<-ctx.Done()
 
-	// Cleanup
-	if err := transport.Close(); err != nil {
-		fmt.Fprintf(os.Stderr, "Error during shutdown: %v\n", err)
-		os.Exit(1)
+	// Stop the server
+	if err := srv.Stop(); err != nil {
+		fmt.Fprintf(os.Stderr, "Error stopping server: %v\n", err)
 	}
 }

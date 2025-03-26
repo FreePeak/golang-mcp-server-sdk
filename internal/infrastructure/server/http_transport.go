@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/pkg/errors"
 
@@ -21,6 +22,7 @@ type HTTPTransport struct {
 	clientMutex sync.RWMutex
 	closeCh     chan struct{}
 	closeOnce   sync.Once
+	handler     transport.MessageHandler
 }
 
 // NewHTTPTransport creates a new HTTP transport
@@ -44,7 +46,10 @@ func NewHTTPTransport(addr string) *HTTPTransport {
 
 // Start starts the transport
 func (t *HTTPTransport) Start(ctx context.Context, handler transport.MessageHandler) error {
-	go t.listenForMessages(ctx, handler)
+	t.handler = handler
+
+	// Start heartbeat goroutine
+	go t.sendHeartbeats(ctx)
 
 	go func() {
 		if err := t.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -166,6 +171,8 @@ func (t *HTTPTransport) handleRequest(w http.ResponseWriter, r *http.Request) {
 
 // handleSSE handles Server-Sent Events connections
 func (t *HTTPTransport) handleSSE(w http.ResponseWriter, r *http.Request) {
+	fmt.Printf("New SSE connection from: %s\n", r.RemoteAddr)
+
 	// Set headers for SSE
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -174,6 +181,7 @@ func (t *HTTPTransport) handleSSE(w http.ResponseWriter, r *http.Request) {
 
 	// Create a unique client ID
 	clientID := fmt.Sprintf("%p", r)
+	fmt.Printf("Assigned client ID: %s\n", clientID)
 
 	// Create message channel for this client
 	messageCh := make(chan shared.JSONRPCMessage, 100)
@@ -181,13 +189,18 @@ func (t *HTTPTransport) handleSSE(w http.ResponseWriter, r *http.Request) {
 	// Register the client
 	t.clientMutex.Lock()
 	t.clients[clientID] = messageCh
+	clientCount := len(t.clients)
 	t.clientMutex.Unlock()
+	fmt.Printf("Client registered. Total clients: %d\n", clientCount)
 
 	// Clean up on connection close
 	defer func() {
+		fmt.Printf("SSE connection closing for client: %s\n", clientID)
 		t.clientMutex.Lock()
 		delete(t.clients, clientID)
+		newClientCount := len(t.clients)
 		t.clientMutex.Unlock()
+		fmt.Printf("Client unregistered. Total clients: %d\n", newClientCount)
 		close(messageCh)
 	}()
 
@@ -195,26 +208,37 @@ func (t *HTTPTransport) handleSSE(w http.ResponseWriter, r *http.Request) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		http.Error(w, "Streaming not supported", http.StatusInternalServerError)
+		fmt.Printf("Error: Streaming not supported for client: %s\n", clientID)
 		return
 	}
+
+	// Initial keepalive to ensure connection is established
+	fmt.Fprintf(w, "data: %s\n\n", `{"type":"connect","status":"ok"}`)
+	flusher.Flush()
+	fmt.Printf("Sent initial keepalive message to client: %s\n", clientID)
 
 	// Send messages to the client
 	for {
 		select {
 		case <-t.closeCh:
+			fmt.Printf("Transport closing for client: %s\n", clientID)
 			return
 		case <-r.Context().Done():
+			fmt.Printf("Client context done for client: %s\n", clientID)
 			return
 		case msg, ok := <-messageCh:
 			if !ok {
+				fmt.Printf("Message channel closed for client: %s\n", clientID)
 				return
 			}
 
 			data, err := json.Marshal(msg)
 			if err != nil {
+				fmt.Printf("Error marshaling message for client %s: %v\n", clientID, err)
 				continue
 			}
 
+			fmt.Printf("Sending message to client %s: %s\n", clientID, string(data))
 			fmt.Fprintf(w, "data: %s\n\n", data)
 			flusher.Flush()
 		}
@@ -228,14 +252,55 @@ func (t *HTTPTransport) handleMessage(ctx context.Context, message shared.JSONRP
 	case <-t.closeCh:
 		return
 	default:
-		// Queue the message
+		// Pass the message to the handler
+		if t.handler != nil {
+			if err := t.handler(ctx, message); err != nil {
+				fmt.Printf("Error handling message: %v\n", err)
+			}
+		}
 	}
 }
 
-// listenForMessages listens for incoming messages and passes them to the handler
-func (t *HTTPTransport) listenForMessages(ctx context.Context, handler transport.MessageHandler) {
-	// This is where we'd process messages from some channel
-	// For HTTP transport, the messages are processed on the handler goroutine directly
+// sendHeartbeats periodically sends heartbeat messages to all connected clients
+func (t *HTTPTransport) sendHeartbeats(ctx context.Context) {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-t.closeCh:
+			return
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			t.clientMutex.RLock()
+			clientCount := len(t.clients)
+			t.clientMutex.RUnlock()
+
+			if clientCount > 0 {
+				fmt.Printf("Sending heartbeat to %d clients\n", clientCount)
+				heartbeat := shared.JSONRPCNotification{
+					JSONRPC: shared.JSONRPCVersion,
+					Method:  "system/heartbeat",
+					Params: map[string]interface{}{
+						"timestamp": time.Now().Unix(),
+					},
+				}
+
+				// Don't use t.Send to avoid recursive lock
+				t.clientMutex.RLock()
+				for id, ch := range t.clients {
+					select {
+					case ch <- heartbeat:
+						// Message sent successfully
+					default:
+						fmt.Printf("Client %s heartbeat channel full, skipping\n", id)
+					}
+				}
+				t.clientMutex.RUnlock()
+			}
+		}
+	}
 }
 
 // HTTPTransportFactory creates HTTP transports

@@ -34,12 +34,13 @@ func main() {
 		cancel()
 	}()
 
-	// Create the MCP server
-	srv := server.NewServer("calculator-server", "1.0.0")
-
-	// Add handlers
-	srv.WithToolHandler(calculator.NewCalculatorHandler())
-	srv.WithResourceHandler(docs.NewDocsHandler())
+	// Create the MCP server with options
+	srv := server.NewServer(
+		"calculator-server",
+		"1.0.0",
+		server.WithToolHandler(calculator.NewCalculatorHandler()),
+		server.WithResourceHandler(docs.NewDocsHandler()),
+	)
 
 	// Connect with the appropriate transport
 	var err error
